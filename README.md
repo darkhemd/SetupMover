@@ -88,7 +88,3 @@ pyinstaller --onefile --windowed --name "iRacing Setup Manager" iracing_setup_ma
 
 - `~/.iracing_setup_manager.json`: letzte Quelle, Ziel, Modus, Season, Move-Status
 - `~/.iracing_aliases.json`: Alias-Liste
-
-## Lizenz
-
-MIT (oder eigene Nutzung frei).
