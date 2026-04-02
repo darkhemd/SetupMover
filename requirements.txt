@@ -1,0 +1,19 @@
+# iRacing Setup Manager – Abhängigkeiten
+# -----------------------------------------------
+# Das Skript selbst nutzt nur Python-Standardbibliotheken
+# (tkinter, os, shutil, json, pathlib) – keine Laufzeit-Pakete nötig.
+#
+# Zum Bauen einer .exe (Windows) mit PyInstaller:
+#
+#   pip install -r requirements.txt
+#   pyinstaller --onefile --windowed --name "iRacing Setup Manager" iracing_setup_manager.py
+#
+# --onefile    → alles in eine einzige .exe gebündelt
+# --windowed   → kein schwarzes Konsolenfenster beim Start
+# --name       → Name der erzeugten .exe
+#
+# Die fertige Datei liegt danach unter:  dist/iRacing Setup Manager.exe
+# -----------------------------------------------
+
+# Build-Tool
+pyinstaller>=6.0
