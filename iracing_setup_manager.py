@@ -108,9 +108,33 @@ COL_HEADS  = ["Alias (im Dateinamen)", "iRacing Ordner", "Notiz", ""]
 
 # ── Format-Erkennung ───────────────────────────────────────────────────────────
 def detect_format(stem: str):
+    """
+    Erkennt drei Setup-Dateinamenschemata:
+    - Format A (5 Teile):  Anbieter_Strecke_Season_Fahrzeug_Setuptyp
+    - Format B (6+ Teile): Anbieter_Season_Fahrzeug_Strecke_Sessiontyp_Setupstil
+    - Format C (5 Teile):  Anbieter_Season_Fahrzeug_Strecke_Setuptyp (VRS-Style)
+    
+    Rückgabe: (car, track, season) oder (None, None, None)
+    """
     parts = stem.split("_")
-    if len(parts) == 5:   return parts[3], parts[1], parts[2]
-    if len(parts) >= 6:   return parts[2], parts[3], parts[1]
+    
+    # Format B (6+ Teile): Anbieter_Season_Fahrzeug_Strecke_...
+    if len(parts) >= 6:
+        return parts[2], parts[3], parts[1]
+    
+    # Format A oder C (5 Teile)
+    if len(parts) == 5:
+        # Format C (VRS-Stil): Anbieter_Season_Fahrzeug_Strecke_Setuptyp
+        # Erkennungsmerkmal: part[2] ist ein bekanntes Alias (z.B. RS3Gen2)
+        # oder part[2] enthält Großbuchstaben (CamelCase wie RS3Gen2, BMWm4GT3)
+        car_candidate = parts[2]
+        if car_candidate and car_candidate[0].isupper() and any(c.isupper() for c in car_candidate[1:]):
+            # Wahrscheinlich Format C (CamelCase-Alias)
+            return parts[2], parts[3], parts[1]
+        
+        # Fallback: Format A (legacy)
+        return parts[3], parts[1], parts[2]
+    
     return None, None, None
 
 
