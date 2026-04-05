@@ -2,6 +2,14 @@
 
 Ein leichter GUI-Werkzeugkasten für iRacing-Setup-Dateien (`.sto`).
 
+## Screenshots
+
+### Setup Kopieren Tab (Hauptansicht)
+![iRacing Setup Manager - Setup Kopieren Tab](screenshots/01_setup_kopieren.png)
+
+### Alias Editor Tab
+![iRacing Setup Manager - Alias Editor Tab](screenshots/02_alias_editor.png)
+
 ## Funktionen
 
 - Verwaltung von Alias-zu-iRacing-Ordner-Zuordnungen
@@ -40,6 +48,7 @@ pyinstaller --onefile --windowed --name "iRacing Setup Manager" iracing_setup_ma
 
 ## Bedienung
 
+**Hauptscreen - Setup Kopieren Tab:**
 1. App starten (z. B. `python iracing_setup_manager.py`).
 2. Auf dem Tab `📋 Setup Kopieren`:
    - `Quelle  (neue Setups)` auswählen: Ordner mit neuen `.sto` Dateien.
@@ -57,6 +66,8 @@ pyinstaller --onefile --windowed --name "iRacing Setup Manager" iracing_setup_ma
 6. `Kopieren` oder `Verschieben` drücken:
    - `Kopieren` erzeugt Kopien, `Verschieben` verschiebt die Dateien.
    - Existierende Dateien werden ersetzt, sofern sie denselben Namen haben.
+
+**Alias Editor Tab:**
 7. Im Tab `🏎 Alias Editor`:
    - Aliase anlegen: `Alias` (Text im Dateinamen) und `iRacing Ordner` (Zielordner in iRacing).
    - `Notiz` hinzufügen (optional).
@@ -88,3 +99,7 @@ pyinstaller --onefile --windowed --name "iRacing Setup Manager" iracing_setup_ma
 
 - `~/.iracing_setup_manager.json`: letzte Quelle, Ziel, Modus, Season, Move-Status
 - `~/.iracing_aliases.json`: Alias-Liste
+
+## Lizenz
+
+MIT (oder eigene Nutzung frei).
