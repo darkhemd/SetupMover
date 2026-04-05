@@ -39,40 +39,6 @@ IRACING_FOLDERS = sorted([
     "trucks silverado","vwbeetlegrc","vwbeetlegrc lite",
 ])
 
-# Starter-Aliase
-DEFAULT_ALIASES: list[dict] = [
-    {"alias": "AudiTCRGen2",    "folder": "audirs3lmsgen2",     "note": "HYMO/SimuCube"},
-    {"alias": "RS3Gen2",        "folder": "audirs3lmsgen2",     "note": "VRS"},
-    {"alias": "AudiR8",         "folder": "audir8lmsevo2gt3",   "note": ""},
-    {"alias": "GR86",           "folder": "toyotagr86",         "note": ""},
-    {"alias": "MX5Cup",         "folder": "mx5 cup",            "note": ""},
-    {"alias": "Ferrari296",     "folder": "ferrari296gt3",      "note": ""},
-    {"alias": "Ferrari488",     "folder": "ferrari488gte",      "note": ""},
-    {"alias": "Ferrari499",     "folder": "ferrari499p",        "note": ""},
-    {"alias": "McLaren720",     "folder": "mclaren720sgt3",     "note": ""},
-    {"alias": "McLaren570",     "folder": "mclaren570sgt4",     "note": ""},
-    {"alias": "Porsche992GT3",  "folder": "porsche992rgt3",     "note": ""},
-    {"alias": "Porsche992Cup",  "folder": "porsche992cup",      "note": ""},
-    {"alias": "Porsche9922Cup", "folder": "porsche9922cup",     "note": ""},
-    {"alias": "Porsche963",     "folder": "porsche963gtp",      "note": ""},
-    {"alias": "BMWM4GT3",       "folder": "bmwm4gt3",           "note": ""},
-    {"alias": "BMWM4GT4",       "folder": "bmwm4gt4",           "note": ""},
-    {"alias": "BMWM4EvoGT4",    "folder": "bmwm4evogt4",        "note": ""},
-    {"alias": "BMWM8GTE",       "folder": "bmwm8gte",           "note": ""},
-    {"alias": "MercedesAMGGT3", "folder": "mercedesamgevogt3",  "note": ""},
-    {"alias": "MercedesAMGGT4", "folder": "mercedesamggt4",     "note": ""},
-    {"alias": "LamborghiniGT3", "folder": "lamborghinievogt3",  "note": ""},
-    {"alias": "AcuraGTP",       "folder": "acuraarx06gtp",      "note": ""},
-    {"alias": "AcuraNSX",       "folder": "acuransxevo22gt3",   "note": ""},
-    {"alias": "CadillacGTP",    "folder": "cadillacvseriesrgtp","note": ""},
-    {"alias": "FordMustangGT3", "folder": "fordmustanggt3",     "note": ""},
-    {"alias": "FordMustangGT4", "folder": "fordmustanggt4",     "note": ""},
-    {"alias": "Corvette",       "folder": "c8rvettegte",        "note": ""},
-    {"alias": "CorvetteZ06",    "folder": "chevyvettez06rgt3",  "note": ""},
-    {"alias": "HondaCivic",     "folder": "hondacivictyper",    "note": ""},
-    {"alias": "HyundaiElantra", "folder": "hyundaielantracn7",  "note": ""},
-]
-
 # ── Farben & Fonts ─────────────────────────────────────────────────────────────
 ACCENT    = "#E8323C"
 BG_DARK   = "#1A1A1A"
@@ -101,7 +67,6 @@ COL_NOTE   = 2
 COL_VALID  = 3
 
 # Spaltenbreiten (Alias / iRacing Ordner / Notiz / Valid-Status)
-# Ordner-Spalte wurde vergrößert, damit lange Einträge gut lesbar sind.
 COL_WIDTHS = [180, 340, 140, 28]
 COL_HEADS  = ["Alias (im Dateinamen)", "iRacing Ordner", "Notiz", ""]
 
@@ -128,7 +93,7 @@ def detect_format(stem: str):
         # Erkennungsmerkmal: part[2] ist ein bekanntes Alias (z.B. RS3Gen2)
         # oder part[2] enthält Großbuchstaben (CamelCase wie RS3Gen2, BMWm4GT3)
         car_candidate = parts[2]
-        if car_candidate and car_candidate[0].isupper() and any(c.isupper() for c in car_candidate[1:]):
+        if car_candidate and any(c.isupper() for c in car_candidate):
             # Wahrscheinlich Format C (CamelCase-Alias)
             return parts[2], parts[3], parts[1]
         
@@ -210,11 +175,11 @@ class AliasStore:
             try:
                 with open(ALIAS_FILE, encoding="utf-8") as f:
                     self.data = json.load(f)
-                return
             except Exception:
                 pass
-        self.data = [dict(d) for d in DEFAULT_ALIASES]
-        self.save()
+        if not self.data:
+            self.data = [dict(d) for d in DEFAULT_ALIASES]
+            self.save()
 
     def save(self):
         with open(ALIAS_FILE, "w", encoding="utf-8") as f:
@@ -237,7 +202,7 @@ class AliasEditor(tk.Frame):
         self.store      = store
         self._rows: list[dict] = []   # {"alias","folder","note","widgets":{}}
         self._filter_var = tk.StringVar()
-        self._filter_var.trace_add("write", lambda *_: self._apply_filter())
+        self._filter_var.trace_add("write", self._apply_filter)
         self._sel_row: int | None = None
         self._unsaved = False
         self._build()
@@ -346,13 +311,14 @@ class AliasEditor(tk.Frame):
         note_var   = tk.StringVar(value=note)
         sel_var    = tk.BooleanVar(value=False)
 
-        # Zeilenhöhe für besser lesbare Eingabe (nicht mehr zu flach)
+        # Zeilenhöhe für besser lesbare Eingabe
         row_ipady = 4
 
         # Checkbox
         cb = tk.Checkbutton(frame, variable=sel_var, bg=bg,
                             activebackground=bg, selectcolor=BG_INPUT,
-                            relief="flat", bd=0)
+                            relief="flat", bd=0, fg="white",
+                            activeforeground="white", font=FONT_BOLD)
         cb.pack(side=tk.LEFT, padx=(4,0))
 
         # Zeilennummer
@@ -365,7 +331,7 @@ class AliasEditor(tk.Frame):
 
         # Alias
         alias_e = tk.Entry(frame, textvariable=alias_var, width=COL_WIDTHS[0]//7, **ekw)
-        alias_e.pack(side=tk.LEFT, padx=2, pady=2, ipady=3)
+        alias_e.pack(side=tk.LEFT, padx=2, pady=2, ipady=row_ipady)
 
         # Ordner (Autocomplete)
         folder_frame = tk.Frame(frame, bg=bg, width=COL_WIDTHS[1], height=30)
@@ -376,7 +342,7 @@ class AliasEditor(tk.Frame):
 
         # Notiz
         note_e = tk.Entry(frame, textvariable=note_var, width=COL_WIDTHS[2]//7, **ekw)
-        note_e.pack(side=tk.LEFT, padx=2, pady=2, ipady=3)
+        note_e.pack(side=tk.LEFT, padx=2, pady=2, ipady=row_ipady)
 
         # Gültigkeits-Indikator
         valid_lbl = tk.Label(frame, text="", bg=bg, font=FONT_SM, width=2)
@@ -448,7 +414,7 @@ class AliasEditor(tk.Frame):
             r["frame"].config(bg=bg)
             r["bg"] = bg
 
-    def _apply_filter(self):
+    def _apply_filter(self, *_):
         q = self._filter_var.get().strip().lower()
         for r in self._rows:
             alias  = r["alias_var"].get().lower()
@@ -807,6 +773,40 @@ class App(tk.Tk):
         self._save_config()
         self.destroy()
 
+
+# Starter-Aliase
+DEFAULT_ALIASES: list[dict] = [
+    {"alias": "AudiTCRGen2",    "folder": "audirs3lmsgen2",     "note": "HYMO/SimuCube"},
+    {"alias": "RS3Gen2",        "folder": "audirs3lmsgen2",     "note": "VRS"},
+    {"alias": "AudiR8",         "folder": "audir8lmsevo2gt3",   "note": ""},
+    {"alias": "GR86",           "folder": "toyotagr86",         "note": ""},
+    {"alias": "MX5Cup",         "folder": "mx5 cup",            "note": ""},
+    {"alias": "Ferrari296",     "folder": "ferrari296gt3",      "note": ""},
+    {"alias": "Ferrari488",     "folder": "ferrari488gte",      "note": ""},
+    {"alias": "Ferrari499",     "folder": "ferrari499p",        "note": ""},
+    {"alias": "McLaren720",     "folder": "mclaren720sgt3",     "note": ""},
+    {"alias": "McLaren570",     "folder": "mclaren570sgt4",     "note": ""},
+    {"alias": "Porsche992GT3",  "folder": "porsche992rgt3",     "note": ""},
+    {"alias": "Porsche992Cup",  "folder": "porsche992cup",      "note": ""},
+    {"alias": "Porsche9922Cup", "folder": "porsche9922cup",     "note": ""},
+    {"alias": "Porsche963",     "folder": "porsche963gtp",      "note": ""},
+    {"alias": "BMWM4GT3",       "folder": "bmwm4gt3",           "note": ""},
+    {"alias": "BMWM4GT4",       "folder": "bmwm4gt4",           "note": ""},
+    {"alias": "BMWM4EvoGT4",    "folder": "bmwm4evogt4",        "note": ""},
+    {"alias": "BMWM8GTE",       "folder": "bmwm8gte",           "note": ""},
+    {"alias": "MercedesAMGGT3", "folder": "mercedesamgevogt3",  "note": ""},
+    {"alias": "MercedesAMGGT4", "folder": "mercedesamggt4",     "note": ""},
+    {"alias": "LamborghiniGT3", "folder": "lamborghinievogt3",  "note": ""},
+    {"alias": "AcuraGTP",       "folder": "acuraarx06gtp",      "note": ""},
+    {"alias": "AcuraNSX",       "folder": "acuransxevo22gt3",   "note": ""},
+    {"alias": "CadillacGTP",    "folder": "cadillacvseriesrgtp","note": ""},
+    {"alias": "FordMustangGT3", "folder": "fordmustanggt3",     "note": ""},
+    {"alias": "FordMustangGT4", "folder": "fordmustanggt4",     "note": ""},
+    {"alias": "Corvette",       "folder": "c8rvettegte",        "note": ""},
+    {"alias": "CorvetteZ06",    "folder": "chevyvettez06rgt3",  "note": ""},
+    {"alias": "HondaCivic",     "folder": "hondacivictyper",    "note": ""},
+    {"alias": "HyundaiElantra", "folder": "hyundaielantracn7",  "note": ""},
+]
 
 if __name__ == "__main__":
     App().mainloop()
