@@ -1,5 +1,9 @@
 venv/
 .venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
 build/
 dist/
-iRacing Setup Manager.spec
+.codex

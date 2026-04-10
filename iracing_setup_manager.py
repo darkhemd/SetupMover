@@ -6,9 +6,12 @@ Format B (6 Teile): Anbieter_Season_Fahrzeug_Strecke_Sessiontyp_Setupstil
 """
 
 from __future__ import annotations
+import argparse
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-import os, shutil, json
+import os, shutil, json, subprocess, sys
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 # ── Dateipfade ─────────────────────────────────────────────────────────────────
@@ -38,6 +41,7 @@ IRACING_FOLDERS = sorted([
     "supercars chevycamarogen3","supercars fordmustanggen3","toyotagr86",
     "trucks silverado","vwbeetlegrc","vwbeetlegrc lite",
 ])
+IRACING_FOLDERS_SET = frozenset(IRACING_FOLDERS)
 
 # ── Farben & Fonts ─────────────────────────────────────────────────────────────
 ACCENT    = "#E8323C"
@@ -101,6 +105,288 @@ def detect_format(stem: str):
         return parts[3], parts[1], parts[2]
     
     return None, None, None
+
+
+def stem_format_label(stem: str) -> str:
+    """Format-Kürzel passend zu detect_format (A / B / C / ?)."""
+    parts = stem.split("_")
+    if len(parts) >= 6:
+        return "B"
+    if len(parts) == 5:
+        car_candidate = parts[2]
+        if car_candidate and any(c.isupper() for c in car_candidate):
+            return "C"
+        return "A"
+    return "?"
+
+
+def build_dest_path(dest_base: Path, folder: str, track: str, mode: str, season: str) -> Path:
+    """Zielverzeichnis unterhalb von dest_base (iRacing-Fahrzeugordner + Unterordner-Modus)."""
+    base = dest_base / folder
+    s = season.strip()
+    if mode == "season":
+        return base / s
+    if mode == "track":
+        return base / track
+    if mode == "both":
+        return base / s / track
+    return base
+
+
+@dataclass(frozen=True)
+class StoPlanEntry:
+    """Ergebnis der Planung für eine .sto-Datei (Scan / Kopieren)."""
+    rel_display: str
+    src_file: Path
+    stem: str
+    car: str | None
+    track: str | None
+    season: str | None
+    iracing_folder: str | None
+    dest_dir: Path | None
+    dest_file: Path | None
+    status: str
+    format_label: str
+    detail: str = ""
+
+    @property
+    def ready(self) -> bool:
+        return self.status == "ready"
+
+
+def plan_sto_operations(
+    dest_base: Path,
+    sto_sources: list[tuple[str, Path]],
+    aliases: dict[str, str],
+    mode: str,
+    season: str,
+) -> list[StoPlanEntry]:
+    """
+    Plant alle Operationen. sto_sources: (Anzeigepfad, absolute Quelldatei).
+    Ziel-Dateiname ist immer der Basisname (flach), auch bei rekursivem Scan.
+    """
+    seen_basenames: set[str] = set()
+    out: list[StoPlanEntry] = []
+    for rel_display, src_abs in sorted(sto_sources, key=lambda t: t[0].replace("\\", "/").lower()):
+        stem = src_abs.stem
+        fname = src_abs.name
+        key = fname.lower()
+        duplicate = key in seen_basenames
+        if not duplicate:
+            seen_basenames.add(key)
+
+        car, track, season_parsed = detect_format(stem)
+        fmt = stem_format_label(stem)
+
+        if duplicate:
+            out.append(
+                StoPlanEntry(
+                    rel_display=rel_display,
+                    src_file=src_abs,
+                    stem=stem,
+                    car=car,
+                    track=track,
+                    season=season_parsed,
+                    iracing_folder=None,
+                    dest_dir=None,
+                    dest_file=None,
+                    status="duplicate_name",
+                    format_label=fmt,
+                    detail="Doppelter Dateiname (flaches Ziel)",
+                )
+            )
+            continue
+
+        if car is None:
+            out.append(
+                StoPlanEntry(
+                    rel_display=rel_display,
+                    src_file=src_abs,
+                    stem=stem,
+                    car=None,
+                    track=None,
+                    season=None,
+                    iracing_folder=None,
+                    dest_dir=None,
+                    dest_file=None,
+                    status="bad_format",
+                    format_label=fmt,
+                    detail="Unbekanntes Namensschema",
+                )
+            )
+            continue
+
+        folder = aliases.get(car)
+        if not folder:
+            out.append(
+                StoPlanEntry(
+                    rel_display=rel_display,
+                    src_file=src_abs,
+                    stem=stem,
+                    car=car,
+                    track=track,
+                    season=season_parsed,
+                    iracing_folder=None,
+                    dest_dir=None,
+                    dest_file=None,
+                    status="no_alias",
+                    format_label=fmt,
+                    detail=f"Kein Alias für „{car}“",
+                )
+            )
+            continue
+
+        dest_dir = build_dest_path(dest_base, folder, track or "", mode, season)
+        dest_file = dest_dir / fname
+        out.append(
+            StoPlanEntry(
+                rel_display=rel_display,
+                src_file=src_abs,
+                stem=stem,
+                car=car,
+                track=track,
+                season=season_parsed,
+                iracing_folder=folder,
+                dest_dir=dest_dir,
+                dest_file=dest_file,
+                status="ready",
+                format_label=fmt,
+                detail="",
+            )
+        )
+    return out
+
+
+def open_path_in_file_manager(path: Path) -> None:
+    """Öffnet einen Ordner im System-Dateimanager."""
+    path = path.resolve()
+    if not path.is_dir():
+        path = path.parent
+    if sys.platform == "win32":
+        os.startfile(path)  # type: ignore[attr-defined, unused-ignore]
+    elif sys.platform == "darwin":
+        subprocess.run(["open", str(path)], check=False)
+    else:
+        subprocess.run(["xdg-open", str(path)], check=False)
+
+
+def merge_path_history(hist: list[str], path: str, max_n: int = 8) -> None:
+    """Aktuellen Pfad an den Anfang der Historie setzen (ohne Duplikate)."""
+    p = (path or "").strip()
+    if not p:
+        return
+    if p in hist:
+        hist.remove(p)
+    hist.insert(0, p)
+    del hist[max_n:]
+
+
+def dest_looks_like_setups_root(path: Path) -> bool:
+    """Heuristik: mindestens ein direkter Unterordner ist ein bekannter iRacing-Fahrzeugordner."""
+    if not path.is_dir():
+        return False
+    try:
+        for child in path.iterdir():
+            if child.is_dir() and child.name in IRACING_FOLDERS_SET:
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def pick_rename_destination(dest_file: Path) -> Path:
+    """Freier Zielpfad mit _v2, _v3, … vor dem Dateityp, falls dest_file existiert."""
+    if not dest_file.exists():
+        return dest_file
+    stem, suf = dest_file.stem, dest_file.suffix
+    parent = dest_file.parent
+    for i in range(2, 10000):
+        c = parent / f"{stem}_v{i}{suf}"
+        if not c.exists():
+            return c
+    return dest_file
+
+
+def collect_sto_sources(src: Path, recursive: bool) -> list[tuple[str, Path]]:
+    """Sammelt .sto-Dateien: (relativer Anzeigepfad, absolute Path)."""
+    base = src.resolve()
+    out: list[tuple[str, Path]] = []
+    if recursive:
+        for p in sorted(base.rglob("*.sto"), key=lambda x: str(x).lower()):
+            out.append((p.relative_to(base).as_posix(), p))
+    else:
+        for p in sorted(base.iterdir(), key=lambda x: x.name.lower()):
+            if p.is_file() and p.suffix.lower() == ".sto":
+                out.append((p.name, p))
+    return out
+
+
+def load_aliases_json_file(path: Path) -> dict[str, str]:
+    """Liest Alias-JSON (Liste von {alias, folder, note?}) in ein Lookup-Dict."""
+    if not path.exists():
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(data, list):
+        return {}
+    out: dict[str, str] = {}
+    for row in data:
+        if not isinstance(row, dict):
+            continue
+        a = str(row.get("alias", "")).strip()
+        fo = str(row.get("folder", "")).strip()
+        if a and fo:
+            out[a] = fo
+    return out
+
+
+def run_cli() -> int:
+    parser = argparse.ArgumentParser(
+        description="iRacing Setup Manager — Headless-Scan (keine GUI).",
+    )
+    parser.add_argument("--scan", action="store_true", help="Setup-Dateien planen und nach stdout melden")
+    parser.add_argument("--source", type=str, required=True, help="Quellordner mit .sto")
+    parser.add_argument("--dest", type=str, default="", help="iRacing setups-Stammordner (Standard: wie in der App)")
+    parser.add_argument("--mode", choices=("none", "season", "track", "both"), default="none")
+    parser.add_argument("--season", type=str, default="26S2")
+    parser.add_argument("--recursive", action="store_true")
+    parser.add_argument(
+        "--aliases-file",
+        type=str,
+        default=str(ALIAS_FILE),
+        help="JSON mit Aliassen (wie ~/.iracing_aliases.json)",
+    )
+    args = parser.parse_args()
+    if not args.scan:
+        parser.error("Derzeit nur --scan unterstützt. Beispiel: --scan --source /pfad/zu/setups")
+    src = Path(args.source).expanduser()
+    if not src.is_dir():
+        print(f"Quelle ist kein Ordner: {src}", file=sys.stderr)
+        return 1
+    dest_s = args.dest.strip() or DEFAULT_DEST
+    dest_base = Path(dest_s).expanduser().resolve()
+    aliases = load_aliases_json_file(Path(args.aliases_file).expanduser())
+    sources = collect_sto_sources(src, args.recursive)
+    if not sources:
+        print("Keine .sto-Dateien gefunden.")
+        return 0
+    plan = plan_sto_operations(dest_base, sources, aliases, args.mode, args.season)
+    n_ok = sum(1 for e in plan if e.ready)
+    n_bad = len(plan) - n_ok
+    print(f"Quelle: {src.resolve()}")
+    print(f"Ziel:   {dest_base}")
+    print(f"Dateien: {len(plan)}  ·  bereit: {n_ok}  ·  übersprungen: {n_bad}")
+    print()
+    for e in plan:
+        if e.ready:
+            print(f"  OK   [{e.format_label}] {e.rel_display}")
+            print(f"       → {e.dest_file}")
+        else:
+            print(f"  SKIP [{e.status}] {e.rel_display} — {e.detail or e.status}")
+    return 0
 
 
 # ── Autocomplete-Entry ─────────────────────────────────────────────────────────
@@ -218,6 +504,8 @@ class AliasEditor(tk.Frame):
         self._tbtn(tb, "↑ Nach oben",  lambda: self._move(-1)).pack(side=tk.LEFT, padx=(0,4))
         self._tbtn(tb, "↓ Nach unten", lambda: self._move( 1)).pack(side=tk.LEFT, padx=(0,12))
         self._tbtn(tb, "💾 Speichern", self._save, primary=True).pack(side=tk.LEFT)
+        self._tbtn(tb, "Export JSON…", self._export_aliases).pack(side=tk.LEFT, padx=(12, 4))
+        self._tbtn(tb, "Import JSON…", self._import_aliases).pack(side=tk.LEFT, padx=(0, 4))
 
         self._save_lbl = tk.Label(tb, text="", bg=BG_MID, fg=FG_DIM, font=FONT_SM)
         self._save_lbl.pack(side=tk.LEFT, padx=8)
@@ -293,6 +581,73 @@ class AliasEditor(tk.Frame):
         self._save_lbl.config(text="✓ gespeichert", fg=GREEN)
         self.after(2500, lambda: self._save_lbl.config(text=""))
         self._update_status()
+
+    def _export_aliases(self):
+        path = filedialog.asksaveasfilename(
+            parent=self,
+            title="Aliase exportieren",
+            defaultextension=".json",
+            filetypes=[("JSON", "*.json"), ("Alle", "*.*")],
+        )
+        if not path:
+            return
+        data = self._collect()
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+        except OSError as e:
+            messagebox.showerror("Export", f"Schreiben fehlgeschlagen:\n{e}")
+            return
+        messagebox.showinfo("Export", f"{len(data)} Einträge nach\n{path}\ngeschrieben.")
+
+    def _import_aliases(self):
+        path = filedialog.askopenfilename(
+            parent=self,
+            title="Aliase importieren",
+            filetypes=[("JSON", "*.json"), ("Alle", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, encoding="utf-8") as f:
+                raw = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            messagebox.showerror("Import", f"Datei konnte nicht gelesen werden:\n{e}")
+            return
+        if not isinstance(raw, list):
+            messagebox.showerror("Import", "Erwartet: JSON-Array von Objekten mit alias, folder, note.")
+            return
+        rows: list[dict] = []
+        for i, item in enumerate(raw):
+            if not isinstance(item, dict):
+                messagebox.showerror("Import", f"Eintrag {i+1} ist kein Objekt.")
+                return
+            rows.append({
+                "alias": str(item.get("alias", "")).strip(),
+                "folder": str(item.get("folder", "")).strip(),
+                "note": str(item.get("note", "")).strip(),
+            })
+        if not rows:
+            messagebox.showinfo("Import", "Keine Einträge in der Datei.")
+            return
+        ans = messagebox.askyesnocancel(
+            "Import",
+            f"{len(rows)} Einträge gefunden.\n\n"
+            "Ja = Tabelle ersetzen\nNein = anhängen\nAbbrechen = nichts tun",
+        )
+        if ans is None:
+            return
+        if ans:
+            for r in list(self._rows):
+                r["frame"].destroy()
+            self._rows.clear()
+        for row in rows:
+            self._append_row(row["alias"], row["folder"], row["note"])
+        self._refresh_numbers()
+        self._update_status()
+        self._mark_unsaved()
+        self.canvas.update_idletasks()
+        self.canvas.yview_moveto(1.0)
 
     def _mark_unsaved(self, *_):
         if not self._unsaved:
@@ -444,6 +799,15 @@ class CopyTab(tk.Frame):
         self.mode_var   = tk.StringVar(value="none")
         self.season_var = tk.StringVar()
         self.move_var   = tk.BooleanVar(value=False)
+        self.recursive_var = tk.BooleanVar(value=False)
+        self.dry_run_var = tk.BooleanVar(value=False)
+        self.backup_var = tk.BooleanVar(value=True)
+        self.collision_var = tk.StringVar(value="overwrite")
+        self._source_history: list[str] = []
+        self._dest_history: list[str] = []
+        self._source_combo: ttk.Combobox | None = None
+        self._dest_combo: ttk.Combobox | None = None
+        self._last_plan: list[StoPlanEntry] = []
         self._build()
 
     def _build(self):
@@ -453,8 +817,22 @@ class CopyTab(tk.Frame):
         self._sec("VERZEICHNISSE").pack(fill=tk.X, **pad)
         df = tk.Frame(self, bg=BG_PANEL, pady=8, padx=8)
         df.pack(fill=tk.X, padx=10, pady=(0,6))
-        self._dir_row(df, "Quelle  (neue Setups):",      self.source_var, self._browse_src)
-        self._dir_row(df, "Ziel      (iRacing Setups):", self.dest_var,   self._browse_dst)
+        self._dir_row_combo(df, "Quelle  (neue Setups):", self.source_var, self._browse_src, "source")
+        self._dir_row_combo(df, "Ziel      (iRacing Setups):", self.dest_var, self._browse_dst, "dest")
+
+        cf = tk.Frame(self, bg=BG_PANEL, padx=10, pady=8)
+        cf.pack(fill=tk.X, padx=10, pady=(0, 6))
+        self._sec("BEI VORHANDENEM ZIEL (GLEICHER DATEINAME)", cf).pack(anchor="w", pady=(0, 4))
+        cr = tk.Frame(cf, bg=BG_PANEL)
+        cr.pack(anchor="w")
+        for lbl, val in [
+            ("Überschreiben", "overwrite"),
+            ("Überspringen", "skip"),
+            ("Umbenennen (_v2 …)", "rename"),
+        ]:
+            ttk.Radiobutton(
+                cr, text=lbl, variable=self.collision_var, value=val,
+            ).pack(side=tk.LEFT, padx=(0, 12))
 
         # Modus + Season
         mid = tk.Frame(self, bg=BG_DARK)
@@ -482,6 +860,9 @@ class CopyTab(tk.Frame):
         ab = tk.Frame(self, bg=BG_MID, pady=6, padx=10)
         ab.pack(fill=tk.X)
         self._abtn(ab, "🔍  Scannen", self._scan, ACCENT).pack(side=tk.LEFT, padx=(0,6))
+        self._abtn(ab, "➕  Fehlende Aliase", self._alias_assistant, BG_INPUT).pack(
+            side=tk.LEFT, padx=(0, 6),
+        )
 
         self._exec_btn = self._abtn(ab, "📋  Kopieren", self._copy, GREEN)
         self._exec_btn.pack(side=tk.LEFT, padx=(0,12))
@@ -495,13 +876,67 @@ class CopyTab(tk.Frame):
             ttk.Radiobutton(toggle_frame, text=lbl, variable=self.move_var,
                             value=val, command=self._upd_exec_btn).pack(side=tk.LEFT, padx=(0,4))
 
+        opt = tk.Frame(ab, bg=BG_MID)
+        opt.pack(side=tk.LEFT, padx=(16, 0))
+        tk.Checkbutton(
+            opt, text="Rekursiv scannen", variable=self.recursive_var,
+            bg=BG_MID, fg=FG_MAIN, selectcolor=BG_INPUT, activebackground=BG_MID,
+            activeforeground=FG_MAIN, font=FONT_SM,
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Checkbutton(
+            opt, text="Nur Vorschau (Dry-Run)", variable=self.dry_run_var,
+            bg=BG_MID, fg=FG_MAIN, selectcolor=BG_INPUT, activebackground=BG_MID,
+            activeforeground=FG_MAIN, font=FONT_SM,
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Checkbutton(
+            opt, text="Backup vor Überschreiben", variable=self.backup_var,
+            bg=BG_MID, fg=FG_MAIN, selectcolor=BG_INPUT, activebackground=BG_MID,
+            activeforeground=FG_MAIN, font=FONT_SM,
+        ).pack(side=tk.LEFT, padx=(0, 4))
+
         tk.Label(ab, text="Aliase aus Editor-Tab", bg=BG_MID,
                  fg=FG_DIM, font=FONT_SM).pack(side=tk.RIGHT, padx=8)
 
-        # Log
-        self._sec("LOG").pack(fill=tk.X, padx=10, pady=(8,2))
-        lw = tk.Frame(self, bg=BG_MID)
-        lw.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0,10))
+        # Ergebnis-Tabelle + Log
+        self._sec("ERGEBNIS").pack(fill=tk.X, padx=10, pady=(8, 2))
+        paned = tk.PanedWindow(self, orient=tk.VERTICAL, bg=BG_DARK, sashwidth=5,
+                               sashrelief=tk.FLAT, bd=0)
+        paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 4))
+
+        twrap = tk.Frame(paned, bg=BG_DARK)
+        cols = ("status", "file", "fmt", "car", "folder", "dest")
+        self._results_tree = ttk.Treeview(
+            twrap, columns=cols, show="headings", height=8, style="Copy.Treeview",
+        )
+        headings = [
+            ("status", "Status", 100),
+            ("file", "Datei", 220),
+            ("fmt", "Fmt", 36),
+            ("car", "Auto (Alias)", 120),
+            ("folder", "iRacing-Ordner", 140),
+            ("dest", "Zielpfad", 360),
+        ]
+        for cid, text, w in headings:
+            self._results_tree.heading(cid, text=text)
+            self._results_tree.column(cid, width=w, minwidth=40, stretch=(cid == "dest"))
+        tvsb = ttk.Scrollbar(twrap, orient="vertical", command=self._results_tree.yview)
+        thsb = ttk.Scrollbar(twrap, orient="horizontal", command=self._results_tree.xview)
+        self._results_tree.configure(yscrollcommand=tvsb.set, xscrollcommand=thsb.set)
+        self._results_tree.grid(row=0, column=0, sticky="nsew")
+        tvsb.grid(row=0, column=1, sticky="ns")
+        thsb.grid(row=1, column=0, sticky="ew")
+        twrap.grid_rowconfigure(0, weight=1)
+        twrap.grid_columnconfigure(0, weight=1)
+        self._results_tree.bind("<Double-1>", self._on_results_double_click)
+        self._results_tree.tag_configure("ready", foreground=GREEN)
+        self._results_tree.tag_configure("warn", foreground=YELLOW)
+        self._results_tree.tag_configure("err", foreground=ACCENT)
+        self._results_tree.tag_configure("dim", foreground=FG_DIM)
+        paned.add(twrap, minsize=100)
+
+        lw = tk.Frame(paned, bg=BG_MID)
+        tk.Label(lw, text="LOG", bg=BG_MID, fg=ACCENT,
+                 font=("Segoe UI", 8, "bold")).pack(fill=tk.X, padx=6, pady=(4, 2))
         self.log = tk.Text(lw, bg=BG_MID, fg=FG_MAIN, font=FONT_MONO,
                            relief="flat", state=tk.DISABLED, wrap="none",
                            insertbackground=FG_MAIN, selectbackground=BORDER)
@@ -516,6 +951,7 @@ class CopyTab(tk.Frame):
         vsb.pack(side=tk.RIGHT,  fill=tk.Y)
         hsb.pack(side=tk.BOTTOM, fill=tk.X)
         self.log.pack(fill=tk.BOTH, expand=True)
+        paned.add(lw, minsize=120)
 
     # ── Widgets ───────────────────────────────────────────────────────────────
     def _sec(self, txt, parent=None):
@@ -523,17 +959,37 @@ class CopyTab(tk.Frame):
         bg = p["bg"] if hasattr(p,"keys") else BG_DARK
         return tk.Label(p, text=txt, bg=bg, fg=ACCENT, font=("Segoe UI",8,"bold"))
 
-    def _dir_row(self, p, lbl, var, cmd):
+    def _dir_row_combo(self, p, lbl, var, cmd, which: str):
         row = tk.Frame(p, bg=BG_PANEL)
         row.pack(fill=tk.X, pady=3)
         tk.Label(row, text=lbl, bg=BG_PANEL, fg=FG_HEAD,
                  font=FONT_UI, width=26, anchor="w").pack(side=tk.LEFT)
-        tk.Entry(row, textvariable=var, bg=BG_INPUT, fg=FG_MAIN,
-                 insertbackground=FG_MAIN, relief="flat", font=FONT_UI, bd=4
-                 ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
+        combo = ttk.Combobox(
+            row,
+            textvariable=var,
+            values=[],
+            style="Dark.TCombobox",
+            font=FONT_UI,
+        )
+        combo.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=6)
         tk.Button(row, text="  …  ", command=cmd, bg=BG_INPUT, fg=FG_MAIN,
                   relief="flat", font=FONT_UI, activebackground=BORDER,
                   activeforeground=FG_MAIN, cursor="hand2").pack(side=tk.LEFT)
+        if which == "source":
+            self._source_combo = combo
+        else:
+            self._dest_combo = combo
+
+    def _sync_history_combos(self) -> None:
+        if self._source_combo is not None:
+            self._source_combo["values"] = self._source_history
+        if self._dest_combo is not None:
+            self._dest_combo["values"] = self._dest_history
+
+    def merge_recent_paths_for_save(self) -> None:
+        merge_path_history(self._source_history, self.source_var.get())
+        merge_path_history(self._dest_history, self.dest_var.get())
+        self._sync_history_combos()
 
     def _abtn(self, p, txt, cmd, bg):
         return tk.Button(p, text=txt, command=cmd, bg=bg, fg="white",
@@ -542,11 +998,17 @@ class CopyTab(tk.Frame):
 
     def _browse_src(self):
         d = filedialog.askdirectory(initialdir=self.source_var.get() or str(Path.home()))
-        if d: self.source_var.set(d)
+        if d:
+            self.source_var.set(d)
+            merge_path_history(self._source_history, d)
+            self._sync_history_combos()
 
     def _browse_dst(self):
         d = filedialog.askdirectory(initialdir=self.dest_var.get() or str(Path.home()))
-        if d: self.dest_var.set(d)
+        if d:
+            self.dest_var.set(d)
+            merge_path_history(self._dest_history, d)
+            self._sync_history_combos()
 
     def _upd_exec_btn(self):
         if self.move_var.get():
@@ -573,115 +1035,317 @@ class CopyTab(tk.Frame):
 
     # ── Pfad-Logik ────────────────────────────────────────────────────────────
     def _build_dest(self, folder, track, mode) -> Path:
-        base = Path(self.dest_var.get()) / folder
-        s    = self.season_var.get().strip()
-        if   mode == "season": return base / s
-        elif mode == "track":  return base / track
-        elif mode == "both":   return base / s / track
-        return base
+        return build_dest_path(
+            Path(self.dest_var.get()), folder, track, mode, self.season_var.get(),
+        )
 
     def _build_dest_resolved(self, dest_base: Path, folder, track, mode) -> Path:
-        """Wie _build_dest aber mit bereits aufgelöstem dest_base-Pfad."""
-        base = dest_base / folder
-        s    = self.season_var.get().strip()
-        if   mode == "season": return base / s
-        elif mode == "track":  return base / track
-        elif mode == "both":   return base / s / track
-        return base
+        return build_dest_path(dest_base, folder, track, mode, self.season_var.get())
 
-    def _get_files(self) -> list[str]:
+    def _get_sto_sources(self) -> list[tuple[str, Path]] | None:
+        """(Anzeigepfad, absolute Path). None bei fehlendem Quellordner (Dialog bereits gezeigt)."""
         src = self.source_var.get()
         if not os.path.isdir(src):
             messagebox.showerror("Fehler", f"Quellverzeichnis nicht gefunden:\n{src}")
+            return None
+        return collect_sto_sources(Path(src), self.recursive_var.get())
+
+    def _status_display(self, status: str) -> str:
+        return {
+            "ready": "bereit",
+            "bad_format": "Format?",
+            "no_alias": "kein Alias",
+            "duplicate_name": "doppelt",
+        }.get(status, status)
+
+    def _fill_results_tree(self, entries: list[StoPlanEntry]) -> None:
+        self._results_tree.delete(*self._results_tree.get_children())
+        for i, e in enumerate(entries):
+            car = e.car or "—"
+            folder = e.iracing_folder or "—"
+            dest = str(e.dest_file) if e.dest_file else (e.detail or "—")
+            if e.ready:
+                tag = "ready"
+            elif e.status == "bad_format":
+                tag = "err"
+            else:
+                tag = "warn"
+            self._results_tree.insert(
+                "",
+                tk.END,
+                iid=str(i),
+                values=(
+                    self._status_display(e.status),
+                    e.rel_display,
+                    e.format_label,
+                    car,
+                    folder,
+                    dest,
+                ),
+                tags=(tag,),
+            )
+
+    def _on_results_double_click(self, _event=None) -> None:
+        sel = self._results_tree.selection()
+        if not sel:
+            return
+        try:
+            idx = int(sel[0])
+        except ValueError:
+            return
+        if idx < 0 or idx >= len(self._last_plan):
+            return
+        e = self._last_plan[idx]
+        target = e.dest_file if e.dest_file else e.src_file
+        try:
+            open_path_in_file_manager(target)
+        except OSError:
+            pass
+
+    def _compute_plan(self, require_dest_exists: bool) -> list[StoPlanEntry] | None:
+        sources = self._get_sto_sources()
+        if sources is None:
+            return None
+        if not sources:
+            self._last_plan = []
             return []
-        return [f for f in os.listdir(src) if f.lower().endswith(".sto")]
+        dest_base = Path(self.dest_var.get()).resolve()
+        if require_dest_exists and not dest_base.exists():
+            messagebox.showerror("Fehler", f"Zielverzeichnis existiert nicht:\n{dest_base}")
+            return None
+        aliases = self.alias_editor.get_alias_dict()
+        plan = plan_sto_operations(
+            dest_base, sources, aliases, self.mode_var.get(), self.season_var.get(),
+        )
+        self._last_plan = plan
+        return plan
+
+    def _backup_file_if_needed(self, dest_file: Path) -> None:
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        bak = dest_file.parent / f"{dest_file.name}.{ts}.bak"
+        shutil.copy2(dest_file, bak)
 
     def _validate(self) -> bool:
-        if self.mode_var.get() in ("season","both") and not self.season_var.get().strip():
+        if self.mode_var.get() in ("season", "both") and not self.season_var.get().strip():
             messagebox.showerror("Fehler", "Bitte Season-Name eingeben.")
             return False
         return True
 
+    def _confirm_dest_root(self, dest_base: Path) -> bool:
+        if not dest_base.exists():
+            return True
+        if dest_looks_like_setups_root(dest_base):
+            return True
+        return messagebox.askokcancel(
+            "Ziel prüfen",
+            "Unter dem Ziel wurden keine bekannten iRacing-Fahrzeugordner gefunden.\n"
+            "Erwartet wird meist der Ordner „setups“ mit Unterordnern wie „bmwm4gt3“ usw.\n\n"
+            "Trotzdem kopieren bzw. verschieben?",
+            icon="warning",
+        )
+
+    def _alias_assistant(self) -> None:
+        cars_ordered: list[str] = []
+        seen: set[str] = set()
+        for e in self._last_plan:
+            if e.status == "no_alias" and e.car and e.car not in seen:
+                seen.add(e.car)
+                cars_ordered.append(e.car)
+        if not cars_ordered:
+            messagebox.showinfo(
+                "Fehlende Aliase",
+                "Zuerst „Scannen“ ausführen — oder es gibt keine fehlenden Aliase im Plan.",
+            )
+            return
+        existing = self.alias_editor.get_alias_dict()
+        added = 0
+        for car in cars_ordered:
+            if car in existing:
+                continue
+            self.alias_editor._append_row(car, "", "Scan")
+            added += 1
+        if added == 0:
+            messagebox.showinfo(
+                "Fehlende Aliase",
+                "Alle erkannten Fahrzeug-Aliase sind bereits mit Ordner eingetragen.",
+            )
+            return
+        self.alias_editor._refresh_numbers()
+        self.alias_editor._update_status()
+        self.alias_editor._mark_unsaved()
+        self.alias_editor.canvas.update_idletasks()
+        self.alias_editor.canvas.yview_moveto(1.0)
+        self.master.select(self.alias_editor)
+        messagebox.showinfo(
+            "Fehlende Aliase",
+            f"{added} neue Zeile(n) im Alias-Editor.\n"
+            "Bitte iRacing-Ordner zuweisen und speichern.",
+        )
+
     # ── Aktionen ──────────────────────────────────────────────────────────────
     def _scan(self):
-        if not self._validate(): return
+        if not self._validate():
+            return
         self._clear_log()
-        files = self._get_files()
-        if not files:
-            self._wlog("Keine .sto Dateien gefunden.", "warn"); return
+        plan = self._compute_plan(require_dest_exists=False)
+        if plan is None:
+            return
+        self._fill_results_tree(plan)
+        if not plan:
+            self._wlog("Keine .sto Dateien gefunden.", "warn")
+            return
         aliases = self.alias_editor.get_alias_dict()
-        mode    = self.mode_var.get()
-        self._wlog(f"━━  Scan  ·  {len(files)} Datei(en)  ·  {len(aliases)} Aliase geladen  ━━", "head")
-        ok = skip = 0
-        for fname in sorted(files):
-            stem = Path(fname).stem
-            car, track, season = detect_format(stem)
-            if car is None:
-                self._wlog(f"  ⚠  Unbekanntes Format: {fname}", "warn"); skip += 1; continue
-            folder = aliases.get(car)
-            if not folder:
-                self._wlog(f"  ⚠  Kein Alias für '{car}': {fname}", "warn"); skip += 1; continue
-            fmt  = "A" if len(stem.split("_"))==5 else "B"
-            dest = self._build_dest(folder, track, mode)
-            self._wlog(f"  ✓  [Fmt-{fmt}]  {fname}", "ok")
-            self._wlog(f"       {car} → {folder}   Strecke: {track}   Season: {season}", "dim")
-            self._wlog(f"       → {dest}", "dim")
-            ok += 1
-        self._wlog(f"\n  → {ok} bereit  ·  {skip} übersprungen", "head")
+        self._wlog(
+            f"━━  Scan  ·  {len(plan)} Datei(en)  ·  {len(aliases)} Aliase geladen  ━━",
+            "head",
+        )
+        n_ready = sum(1 for e in plan if e.ready)
+        n_skip = len(plan) - n_ready
+        for e in plan:
+            if e.ready:
+                self._wlog(f"  ✓  [Fmt-{e.format_label}]  {e.rel_display}", "ok")
+                self._wlog(
+                    f"       {e.car} → {e.iracing_folder}   "
+                    f"Strecke: {e.track}   Season: {e.season}",
+                    "dim",
+                )
+                self._wlog(f"       → {e.dest_file}", "dim")
+            elif e.status == "bad_format":
+                self._wlog(f"  ⚠  Unbekanntes Format: {e.rel_display}", "warn")
+            elif e.status == "no_alias":
+                self._wlog(
+                    f"  ⚠  Kein Alias für '{e.car}': {e.rel_display}",
+                    "warn",
+                )
+            else:
+                self._wlog(f"  ⚠  {e.detail}: {e.rel_display}", "warn")
+        self._wlog(f"\n  → {n_ready} bereit  ·  {n_skip} übersprungen", "head")
 
     def _copy(self):
-        if not self._validate(): return
+        if not self._validate():
+            return
         self._clear_log()
-        files = self._get_files()
-        if not files:
-            self._wlog("Keine .sto Dateien gefunden.", "warn"); return
-        moving   = self.move_var.get()
-        aliases  = self.alias_editor.get_alias_dict()
-        mode     = self.mode_var.get()
+        plan = self._compute_plan(require_dest_exists=True)
+        if plan is None:
+            return
+        self._fill_results_tree(plan)
+        if not plan:
+            self._wlog("Keine .sto Dateien gefunden.", "warn")
+            return
+
+        moving = self.move_var.get()
+        dry = self.dry_run_var.get()
+        aliases = self.alias_editor.get_alias_dict()
         src_base = Path(self.source_var.get()).resolve()
         dest_base = Path(self.dest_var.get()).resolve()
-        if not dest_base.exists():
-            self._wlog(f"  ✗  Zielverzeichnis existiert nicht: {dest_base}", "error"); return
-        if moving and not messagebox.askyesno(
-                "Verschieben bestätigen",
-                f"{len(files)} Datei(en) werden aus dem Quellordner entfernt.\n\nFortfahren?"):
+        ready_entries = [e for e in plan if e.ready]
+
+        if moving and not dry and not messagebox.askyesno(
+            "Verschieben bestätigen",
+            f"{len(ready_entries)} Datei(en) werden aus dem Quellordner entfernt.\n\nFortfahren?",
+        ):
             return
+
+        if not dry and not self._confirm_dest_root(dest_base):
+            return
+
         verb = "Verschieben" if moving else "Kopieren"
+        if dry:
+            verb = "Vorschau (" + verb + ")"
         self._wlog(f"━━  {verb}  ·  {len(aliases)} Aliase aktiv  ━━", "head")
         self._wlog(f"  Quelle: {src_base}", "dim")
         self._wlog(f"  Ziel:   {dest_base}", "dim")
-        ok = skip = ow = 0
-        for fname in sorted(files):
-            stem = Path(fname).stem
-            car, track, season = detect_format(stem)
-            if car is None:
-                self._wlog(f"  ⚠  Unbekanntes Format: {fname}", "warn"); skip += 1; continue
-            folder = aliases.get(car)
-            if not folder:
-                self._wlog(f"  ⚠  Kein Alias für '{car}' — im Alias-Editor eintragen: {fname}", "warn")
-                skip += 1; continue
-            dest_dir  = self._build_dest_resolved(dest_base, folder, track, mode)
-            src_file  = src_base / fname
-            dest_file = dest_dir / fname
-            existed   = dest_file.exists()
-            try:
-                os.makedirs(dest_dir, exist_ok=True)
-                if moving:
-                    shutil.move(str(src_file), str(dest_file))
+        if dry:
+            self._wlog("  (Dry-Run: keine Dateien geändert)", "head")
+
+        ok = skip = ow = coll_skip = 0
+        collision = self.collision_var.get()
+        for e in plan:
+            if not e.ready:
+                if e.status == "bad_format":
+                    self._wlog(f"  ⚠  Unbekanntes Format: {e.rel_display}", "warn")
+                elif e.status == "no_alias":
+                    self._wlog(
+                        f"  ⚠  Kein Alias für '{e.car}' — im Alias-Editor eintragen: {e.rel_display}",
+                        "warn",
+                    )
                 else:
-                    shutil.copy2(str(src_file), str(dest_file))
-                # Verify the file actually arrived
-                if not dest_file.exists():
-                    raise FileNotFoundError(f"Datei nach der Operation nicht vorhanden: {dest_file}")
-                icon = "✂" if moving else ("♻" if existed else "✓")
-                self._wlog(f"  {icon}  {fname}", "warn" if existed else "ok")
-                self._wlog(f"       → {dest_file}", "dim")
+                    self._wlog(f"  ⚠  {e.detail}: {e.rel_display}", "warn")
+                skip += 1
+                continue
+
+            src_file = e.src_file
+            dest_file = e.dest_file
+            assert dest_file is not None
+            existed = dest_file.exists()
+            final_dest = dest_file
+
+            if existed and collision == "skip":
+                if dry:
+                    self._wlog(f"  ◌  {e.rel_display}", "warn")
+                    self._wlog("       übersprungen — Ziel existiert bereits", "dim")
+                else:
+                    self._wlog(f"  ◌  {e.rel_display}  (übersprungen, Ziel existiert)", "warn")
+                coll_skip += 1
+                continue
+
+            if existed and collision == "rename":
+                final_dest = pick_rename_destination(dest_file)
+
+            if dry:
+                self._wlog(f"  ◇  {e.rel_display}", "ok")
+                self._wlog(f"       → {final_dest}", "dim")
+                if existed and collision == "overwrite":
+                    self._wlog("       (würde überschreiben)", "warn")
+                    ow += 1
+                elif existed and collision == "rename" and final_dest != dest_file:
+                    self._wlog("       (neuer Name wegen Kollision)", "dim")
                 ok += 1
-                if existed: ow += 1
-            except Exception as e:
-                self._wlog(f"  ✗  {fname}: {e}", "error"); skip += 1
+                continue
+
+            try:
+                os.makedirs(final_dest.parent, exist_ok=True)
+                if existed and collision == "overwrite" and self.backup_var.get():
+                    self._backup_file_if_needed(dest_file)
+                if moving:
+                    shutil.move(str(src_file), str(final_dest))
+                else:
+                    shutil.copy2(str(src_file), str(final_dest))
+                if not final_dest.exists():
+                    raise FileNotFoundError(
+                        f"Datei nach der Operation nicht vorhanden: {final_dest}",
+                    )
+                overwritten = existed and collision == "overwrite"
+                renamed = existed and collision == "rename" and final_dest != dest_file
+                icon = "✂" if moving else ("♻" if overwritten else ("⎘" if renamed else "✓"))
+                tag = "warn" if overwritten else "ok"
+                self._wlog(f"  {icon}  {e.rel_display}", tag)
+                self._wlog(f"       → {final_dest}", "dim")
+                ok += 1
+                if overwritten:
+                    ow += 1
+            except Exception as ex:
+                self._wlog(f"  ✗  {e.rel_display}: {ex}", "error")
+                skip += 1
+
         verb_past = "verschoben" if moving else "kopiert"
-        self._wlog(f"\n  → {ok} {verb_past}  ({ow} überschrieben)  ·  {skip} übersprungen", "head")
+        tail = f"{skip} übersprungen"
+        if coll_skip:
+            tail += f"  ·  {coll_skip} Kollision übersprungen"
+        if dry:
+            self._wlog(f"\n  → {ok} geplant  ({ow} Überschreiben)  ·  {tail}", "head")
+            messagebox.showinfo(
+                "Dry-Run",
+                f"{ok} Operation(en) würden ausgeführt.\n"
+                f"{ow} würden ein vorhandenes Ziel überschreiben.\n"
+                f"{coll_skip} wegen „Überspringen“ bei Kollision.\n"
+                f"{skip} wegen Format/Alias/Duplikat.",
+            )
+        else:
+            self._wlog(
+                f"\n  → {ok} {verb_past}  ({ow} überschrieben)  ·  {tail}",
+                "head",
+            )
 
 
 # ── Haupt-App ──────────────────────────────────────────────────────────────────
@@ -705,6 +1369,23 @@ class App(tk.Tk):
         style.map("Dark.TNotebook.Tab",
                   background=[("selected", BG_PANEL), ("active", BG_INPUT)],
                   foreground=[("selected", FG_MAIN),  ("active", FG_MAIN)])
+        style.configure(
+            "Copy.Treeview",
+            background=BG_MID,
+            foreground=FG_MAIN,
+            fieldbackground=BG_MID,
+            font=FONT_SM,
+        )
+        style.configure("Copy.Treeview.Heading", background=BG_PANEL, foreground=FG_HEAD)
+        style.map("Copy.Treeview", background=[("selected", BG_SEL)])
+        style.configure(
+            "Dark.TCombobox",
+            fieldbackground=BG_INPUT,
+            background=BG_INPUT,
+            foreground=FG_MAIN,
+            arrowcolor=FG_MAIN,
+        )
+        style.map("Dark.TCombobox", fieldbackground=[("readonly", BG_INPUT)])
 
         self._build()
         self._load_config()
@@ -746,16 +1427,36 @@ class App(tk.Tk):
         self.copy_tab.mode_var.set(cfg.get("mode",     "none"))
         self.copy_tab.season_var.set(cfg.get("season", "26S2"))
         self.copy_tab.move_var.set(cfg.get("move",     False))
+        self.copy_tab.recursive_var.set(cfg.get("recursive", False))
+        self.copy_tab.dry_run_var.set(cfg.get("dry_run", False))
+        self.copy_tab.backup_var.set(cfg.get("backup", True))
+        sh = cfg.get("source_history", [])
+        if isinstance(sh, list):
+            self.copy_tab._source_history = [str(x) for x in sh if isinstance(x, str)][:8]
+        dh = cfg.get("dest_history", [])
+        if isinstance(dh, list):
+            self.copy_tab._dest_history = [str(x) for x in dh if isinstance(x, str)][:8]
+        col = cfg.get("collision", "overwrite")
+        if col in ("overwrite", "skip", "rename"):
+            self.copy_tab.collision_var.set(col)
+        self.copy_tab._sync_history_combos()
         self.copy_tab._upd_season()
         self.copy_tab._upd_exec_btn()
 
     def _save_config(self):
+        self.copy_tab.merge_recent_paths_for_save()
         cfg = {
             "source": self.copy_tab.source_var.get(),
             "dest":   self.copy_tab.dest_var.get(),
             "mode":   self.copy_tab.mode_var.get(),
             "season": self.copy_tab.season_var.get(),
             "move":   self.copy_tab.move_var.get(),
+            "recursive": self.copy_tab.recursive_var.get(),
+            "dry_run": self.copy_tab.dry_run_var.get(),
+            "backup": self.copy_tab.backup_var.get(),
+            "collision": self.copy_tab.collision_var.get(),
+            "source_history": self.copy_tab._source_history,
+            "dest_history": self.copy_tab._dest_history,
         }
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
@@ -809,4 +1510,6 @@ DEFAULT_ALIASES: list[dict] = [
 ]
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        raise SystemExit(run_cli())
     App().mainloop()

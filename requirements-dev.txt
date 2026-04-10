@@ -1,0 +1,2 @@
+# Entwicklung / Tests
+pytest>=7.0
