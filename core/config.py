@@ -16,3 +16,4 @@ AUTOCOMPLETE_MAX_SHOWN: int = 9
 WINDOW_GEOMETRY:        str = "980x780"
 WINDOW_MIN_W:           int = 880
 WINDOW_MIN_H:           int = 680
+BACKUP_KEEP_MAX:        int = 5

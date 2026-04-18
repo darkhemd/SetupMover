@@ -5,7 +5,7 @@ requires-python = ">=3.9"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "ruff>=0.4", "pyinstaller>=6.0"]
+dev = ["pytest>=7.0", "ruff>=0.4", "mypy>=1.0", "pyinstaller>=6.0"]
 
 [project.scripts]
 iracing-setup-manager = "iracing_setup_manager:main"
@@ -20,3 +20,7 @@ target-version = "py39"
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
 ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.9"
+ignore_missing_imports = true

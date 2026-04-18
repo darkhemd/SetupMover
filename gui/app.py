@@ -89,9 +89,25 @@ class App(tk.Tk):
         if CONFIG_FILE.exists():
             try:
                 with open(CONFIG_FILE, encoding="utf-8") as f:
-                    cfg = json.load(f)
-            except Exception:
-                pass
+                    raw = json.load(f)
+                if not isinstance(raw, dict):
+                    raise ValueError("Kein JSON-Objekt")
+                cfg = raw
+            except json.JSONDecodeError as exc:
+                messagebox.showwarning(
+                    "Konfiguration fehlerhaft",
+                    f"Konfigurationsdatei konnte nicht gelesen werden:\n{CONFIG_FILE}\n\n{exc}\n\nStandardwerte werden verwendet.",
+                )
+            except ValueError as exc:
+                messagebox.showwarning(
+                    "Konfiguration fehlerhaft",
+                    f"Ungültiges Format in:\n{CONFIG_FILE}\n\n{exc}\n\nStandardwerte werden verwendet.",
+                )
+            except OSError as exc:
+                messagebox.showwarning(
+                    "Konfiguration nicht lesbar",
+                    f"{CONFIG_FILE}\n\n{exc}",
+                )
         self.copy_tab.source_var.set(cfg.get("source", DEFAULT_SOURCE))
         self.copy_tab.dest_var.set(cfg.get("dest",     DEFAULT_DEST))
         self.copy_tab.mode_var.set(cfg.get("mode",     "none"))

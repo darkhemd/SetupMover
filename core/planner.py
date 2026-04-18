@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Literal
 
+from core.config import BACKUP_KEEP_MAX
 from core.formats import detect_format, stem_format_label
 from core.paths import build_dest_path, pick_rename_destination
 
@@ -108,6 +109,17 @@ def plan_sto_operations(
     return out
 
 
+def _prune_backups(dest_file: Path) -> None:
+    """Löscht älteste Backups wenn mehr als BACKUP_KEEP_MAX vorhanden."""
+    pattern = f"{dest_file.stem}_*.bak{dest_file.suffix}"
+    baks = sorted(dest_file.parent.glob(pattern))
+    for old in baks[:-BACKUP_KEEP_MAX]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+
 def execute_copy_plan(
     plan: list[StoPlanEntry],
     moving: bool,
@@ -162,6 +174,7 @@ def execute_copy_plan(
                         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                         bak = dest_file.with_name(f"{dest_file.stem}_{ts}.bak{dest_file.suffix}")
                         shutil.copy2(str(dest_file), str(bak))
+                        _prune_backups(dest_file)
                     outcome = "overwritten"
                     overwritten += 1
 

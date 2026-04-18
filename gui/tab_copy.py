@@ -8,6 +8,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import TYPE_CHECKING
 
+from core.config import BACKUP_KEEP_MAX
 from core.paths import (
     collect_sto_sources,
     dest_looks_like_setups_root,
@@ -126,6 +127,8 @@ class CopyTab(tk.Frame):
         tk.Label(ab, text="Aliase aus Editor-Tab", bg=BG_MID, fg=FG_DIM, font=FONT_SM).pack(side=tk.RIGHT, padx=8)
 
         self._sec("ERGEBNIS").pack(fill=tk.X, padx=10, pady=(8, 2))
+        self._status_lbl = tk.Label(self, text="", bg=BG_DARK, fg=FG_DIM, font=FONT_SM, anchor="w")
+        self._status_lbl.pack(fill=tk.X, padx=14, pady=(0, 3))
         paned = tk.PanedWindow(self, orient=tk.VERTICAL, bg=BG_DARK, sashwidth=5, sashrelief=tk.FLAT, bd=0)
         paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 4))
 
@@ -229,6 +232,34 @@ class CopyTab(tk.Frame):
         state = tk.NORMAL if self.mode_var.get() in ("season", "both") else tk.DISABLED
         self.season_entry.config(state=state, fg=FG_MAIN if state == tk.NORMAL else FG_DIM)
 
+    def _set_status_scan(self, plan: list[StoPlanEntry]) -> None:
+        n_ready   = sum(1 for e in plan if e.ready)
+        n_alias   = sum(1 for e in plan if e.status == "no_alias")
+        n_fmt     = sum(1 for e in plan if e.status == "bad_format")
+        n_dup     = sum(1 for e in plan if e.status == "duplicate_name")
+        parts = [f"{len(plan)} Dateien", f"{n_ready} bereit"]
+        if n_alias:
+            parts.append(f"{n_alias} kein Alias")
+        if n_fmt:
+            parts.append(f"{n_fmt} Format?")
+        if n_dup:
+            parts.append(f"{n_dup} doppelt")
+        perfect = n_ready == len(plan)
+        self._status_lbl.config(
+            text="  \U0001f4ca  " + "  \u00b7  ".join(parts),
+            fg=GREEN if perfect else YELLOW,
+        )
+
+    def _set_status_copy(self, ok: int, skipped: int, moving: bool, dry: bool) -> None:
+        verb = "verschoben" if moving else ("geplant" if dry else "kopiert")
+        parts = [f"{ok} {verb}"]
+        if skipped:
+            parts.append(f"{skipped} \u00fcbersprungen")
+        self._status_lbl.config(
+            text="  \u2714  " + "  \u00b7  ".join(parts),
+            fg=GREEN if not skipped else YELLOW,
+        )
+
     # ── Log ───────────────────────────────────────────────────────────────────
     def _wlog(self, msg, tag=""):
         self.log.config(state=tk.NORMAL)
@@ -301,6 +332,12 @@ class CopyTab(tk.Frame):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         bak = dest_file.parent / f"{dest_file.name}.{ts}.bak"
         shutil.copy2(dest_file, bak)
+        baks = sorted(dest_file.parent.glob(f"{dest_file.name}.*.bak"))
+        for old in baks[:-BACKUP_KEEP_MAX]:
+            try:
+                old.unlink()
+            except OSError:
+                pass
 
     def _validate(self) -> bool:
         if self.mode_var.get() in ("season", "both") and not self.season_var.get().strip():
@@ -382,6 +419,7 @@ class CopyTab(tk.Frame):
             else:
                 self._wlog(f"  ⚠  {e.detail}: {e.rel_display}", "warn")
         self._wlog(f"\n  → {n_ready} bereit  ·  {n_skip} übersprungen", "head")
+        self._set_status_scan(plan)
 
     def _copy(self):
         if not self._validate():
@@ -495,3 +533,4 @@ class CopyTab(tk.Frame):
                 f"{skip} wegen Format/Alias/Duplikat.")
         else:
             self._wlog(f"\n  → {ok} {verb_past}  ({ow} überschrieben)  ·  {tail}", "head")
+        self._set_status_copy(ok, skip + coll_skip, moving, dry)
