@@ -1,0 +1,22 @@
+[project]
+name = "iracing-setup-manager"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0", "ruff>=0.4", "pyinstaller>=6.0"]
+
+[project.scripts]
+iracing-setup-manager = "iracing_setup_manager:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]
