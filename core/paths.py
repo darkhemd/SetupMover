@@ -10,7 +10,22 @@ from data.iracing_folders import IRACING_FOLDERS_SET
 
 
 def build_dest_path(dest_base: Path, folder: str, track: str, mode: str, season: str) -> Path:
-    """Zielverzeichnis unterhalb von dest_base (iRacing-Fahrzeugordner + Unterordner-Modus)."""
+    """
+    Berechnet das Zielverzeichnis unterhalb von dest_base.
+
+    Parameters
+    ----------
+    dest_base:
+        iRacing-Setups-Stammordner.
+    folder:
+        iRacing-Fahrzeugordnername (z. B. ``bmwm4gt3``).
+    track:
+        Streckenname aus dem Dateinamen.
+    mode:
+        Unterordner-Modus: ``none`` | ``season`` | ``track`` | ``both``.
+    season:
+        Season-Bezeichnung (z. B. ``26S2``), nur relevant für ``season``/``both``.
+    """
     base = dest_base / folder
     s = season.strip()
     if mode == "season":
@@ -23,7 +38,7 @@ def build_dest_path(dest_base: Path, folder: str, track: str, mode: str, season:
 
 
 def pick_rename_destination(dest_file: Path) -> Path:
-    """Freier Zielpfad mit _v2, _v3, … vor dem Dateityp, falls dest_file existiert."""
+    """Gibt einen freien Zielpfad zurück (_v2, _v3, …), wenn *dest_file* bereits existiert."""
     if not dest_file.exists():
         return dest_file
     stem, suf = dest_file.stem, dest_file.suffix
@@ -63,7 +78,7 @@ def open_path_in_file_manager(path: Path) -> None:
 
 
 def merge_path_history(hist: list[str], path: str, max_n: int = HISTORY_MAX_ITEMS) -> None:
-    """Aktuellen Pfad an den Anfang der Historie setzen (ohne Duplikate)."""
+    """Setzt *path* an den Anfang von *hist* und entfernt Duplikate (max *max_n* Einträge)."""
     p = (path or "").strip()
     if not p:
         return

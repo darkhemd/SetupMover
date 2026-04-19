@@ -62,6 +62,7 @@ class App(tk.Tk):
 
         self._build()
         self._load_config()
+        self._setup_mousewheel()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build(self):
@@ -125,6 +126,11 @@ class App(tk.Tk):
         col = cfg.get("collision", "overwrite")
         if col in ("overwrite", "skip", "rename"):
             self.copy_tab.collision_var.set(col)
+        cw = cfg.get("column_widths")
+        if isinstance(cw, dict):
+            self.copy_tab.apply_column_widths(
+                {str(k): int(v) for k, v in cw.items() if isinstance(v, int)}
+            )
         self.copy_tab._sync_history_combos()
         self.copy_tab._upd_season()
         self.copy_tab._upd_exec_btn()
@@ -143,12 +149,33 @@ class App(tk.Tk):
             "collision":      self.copy_tab.collision_var.get(),
             "source_history": self.copy_tab._source_history,
             "dest_history":   self.copy_tab._dest_history,
+            "column_widths":  self.copy_tab.get_column_widths(),
         }
         try:
             with open(CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2, ensure_ascii=False)
         except Exception:
             pass
+
+    def _setup_mousewheel(self):
+        def _scroll(event):
+            w = self.winfo_containing(event.x_root, event.y_root)
+            delta = -1 if (getattr(event, "num", 0) == 4 or getattr(event, "delta", 0) > 0) else 1
+            while w and str(w) != ".":
+                cls = w.winfo_class()
+                if cls == "Text":
+                    return  # Text scrollt nativ via Klassen-Binding
+                if cls in ("Treeview", "Canvas", "Listbox"):
+                    w.yview_scroll(delta, "units")
+                    return
+                try:
+                    w = w.nametowidget(w.winfo_parent())
+                except Exception:
+                    break
+
+        self.bind_all("<Button-4>",   _scroll)  # Linux scroll up
+        self.bind_all("<Button-5>",   _scroll)  # Linux scroll down
+        self.bind_all("<MouseWheel>", _scroll)  # Windows / macOS
 
     def _on_close(self):
         if self.alias_tab._unsaved:

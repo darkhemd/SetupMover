@@ -116,8 +116,6 @@ class AliasEditor(tk.Frame):
             self.canvas.itemconfig(self._canvas_win, width=e.width))
         vsb.pack(side=tk.RIGHT, fill=tk.Y)
         self.canvas.pack(fill=tk.BOTH, expand=True)
-        self.canvas.bind_all("<MouseWheel>", lambda e:
-            self.canvas.yview_scroll(int(-1 * e.delta / 120), "units"))
 
         self._status = tk.Label(self, text="", bg=BG_MID, fg=FG_DIM, font=FONT_SM,
                                 anchor="w", padx=8, pady=3)

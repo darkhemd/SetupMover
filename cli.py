@@ -21,6 +21,8 @@ def run_cli() -> int:
     parser.add_argument("--recursive", action="store_true")
     parser.add_argument("--aliases-file", type=str, default=str(ALIAS_FILE),
                         help="JSON mit Aliassen (wie ~/.iracing_aliases.json)")
+    parser.add_argument("--config-dir", dest="config_dir", default=None,
+                        help=argparse.SUPPRESS)
     args = parser.parse_args()
     if not args.scan:
         parser.error("Derzeit nur --scan unterstützt. Beispiel: --scan --source /pfad/zu/setups")

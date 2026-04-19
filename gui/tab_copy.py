@@ -8,7 +8,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import TYPE_CHECKING
 
-from core.config import BACKUP_KEEP_MAX
+from core.config import BACKUP_KEEP_MAX, WATCH_INTERVAL_MS
 from core.paths import (
     collect_sto_sources,
     dest_looks_like_setups_root,
@@ -35,6 +35,7 @@ from gui.theme import (
     GREEN,
     YELLOW,
 )
+from gui.widgets import ErrorDialog, PreviewDialog
 
 if TYPE_CHECKING:
     from gui.tab_alias import AliasEditor
@@ -58,6 +59,9 @@ class CopyTab(tk.Frame):
         self._source_combo: ttk.Combobox | None = None
         self._dest_combo:   ttk.Combobox | None = None
         self._last_plan: list[StoPlanEntry] = []
+        self.watch_var = tk.BooleanVar(value=False)
+        self._watch_after_id: str | None = None
+        self._watch_known_files: set[str] = set()
         self._build()
 
     def _build(self):
@@ -123,6 +127,11 @@ class CopyTab(tk.Frame):
                            bg=BG_MID, fg=FG_MAIN, selectcolor=BG_INPUT,
                            activebackground=BG_MID, activeforeground=FG_MAIN,
                            font=FONT_SM).pack(side=tk.LEFT, padx=(0, 8))
+        tk.Checkbutton(opt, text="Quelle beobachten", variable=self.watch_var,
+                       command=self._watch_toggle,
+                       bg=BG_MID, fg=FG_MAIN, selectcolor=BG_INPUT,
+                       activebackground=BG_MID, activeforeground=FG_MAIN,
+                       font=FONT_SM).pack(side=tk.LEFT, padx=(0, 8))
 
         tk.Label(ab, text="Aliase aus Editor-Tab", bg=BG_MID, fg=FG_DIM, font=FONT_SM).pack(side=tk.RIGHT, padx=8)
 
@@ -135,10 +144,11 @@ class CopyTab(tk.Frame):
         twrap = tk.Frame(paned, bg=BG_DARK)
         cols = ("status", "file", "fmt", "car", "folder", "dest")
         self._results_tree = ttk.Treeview(twrap, columns=cols, show="headings", height=8, style="Copy.Treeview")
-        for cid, text, w in [
+        self._tree_columns = [
             ("status", "Status", 100), ("file", "Datei", 220), ("fmt", "Fmt", 36),
             ("car", "Auto (Alias)", 120), ("folder", "iRacing-Ordner", 140), ("dest", "Zielpfad", 360),
-        ]:
+        ]
+        for cid, text, w in self._tree_columns:
             self._results_tree.heading(cid, text=text)
             self._results_tree.column(cid, width=w, minwidth=40, stretch=(cid == "dest"))
         tvsb = ttk.Scrollbar(twrap, orient="vertical",   command=self._results_tree.yview)
@@ -150,10 +160,12 @@ class CopyTab(tk.Frame):
         twrap.grid_rowconfigure(0, weight=1)
         twrap.grid_columnconfigure(0, weight=1)
         self._results_tree.bind("<Double-1>", self._on_results_double_click)
+        self._results_tree.bind("<Button-3>", self._on_results_right_click)
         self._results_tree.tag_configure("ready", foreground=GREEN)
         self._results_tree.tag_configure("warn",  foreground=YELLOW)
         self._results_tree.tag_configure("err",   foreground=ACCENT)
         self._results_tree.tag_configure("dim",   foreground=FG_DIM)
+        self._results_tree.tag_configure("new",   foreground="#00e5cc")
         paned.add(twrap, minsize=100)
 
         lw = tk.Frame(paned, bg=BG_MID)
@@ -202,6 +214,18 @@ class CopyTab(tk.Frame):
         merge_path_history(self._source_history, self.source_var.get())
         merge_path_history(self._dest_history, self.dest_var.get())
         self._sync_history_combos()
+
+    def get_column_widths(self) -> dict[str, int]:
+        return {
+            cid: int(self._results_tree.column(cid, "width"))
+            for cid, _, _ in self._tree_columns
+        }
+
+    def apply_column_widths(self, widths: dict[str, int]) -> None:
+        valid_cids = {cid for cid, _, _ in self._tree_columns}
+        for cid, w in widths.items():
+            if cid in valid_cids and isinstance(w, int) and w >= 20:
+                self._results_tree.column(cid, width=w)
 
     def _abtn(self, p, txt, cmd, bg):
         return tk.Button(p, text=txt, command=cmd, bg=bg, fg="white",
@@ -276,7 +300,9 @@ class CopyTab(tk.Frame):
     def _get_sto_sources(self) -> list[tuple[str, Path]] | None:
         src = self.source_var.get()
         if not os.path.isdir(src):
-            messagebox.showerror("Fehler", f"Quellverzeichnis nicht gefunden:\n{src}")
+            ErrorDialog(self, "Quellverzeichnis nicht gefunden",
+                        "Der angegebene Quellordner existiert nicht oder ist kein Verzeichnis.",
+                        path=src)
             return None
         return collect_sto_sources(Path(src), self.recursive_var.get())
 
@@ -305,8 +331,41 @@ class CopyTab(tk.Frame):
         if idx < 0 or idx >= len(self._last_plan):
             return
         e = self._last_plan[idx]
+        PreviewDialog(self, e.src_file,
+                      fmt=e.format_label, car=e.car, track=e.track, season=e.season)
+
+    def _on_results_right_click(self, event: tk.Event) -> None:  # type: ignore[type-arg]
+        iid = self._results_tree.identify_row(event.y)
+        if not iid:
+            return
+        self._results_tree.selection_set(iid)
         try:
-            open_path_in_file_manager(e.dest_file if e.dest_file else e.src_file)
+            idx = int(iid)
+        except ValueError:
+            return
+        if idx < 0 or idx >= len(self._last_plan):
+            return
+        e = self._last_plan[idx]
+        menu = tk.Menu(self, tearoff=0, bg=BG_MID, fg=FG_MAIN,
+                       activebackground=BG_SEL, activeforeground=FG_MAIN,
+                       relief="flat", bd=1)
+        menu.add_command(label="Inhalt anzeigen (Vorschau)",
+                         command=lambda: PreviewDialog(
+                             self, e.src_file,
+                             fmt=e.format_label, car=e.car, track=e.track, season=e.season))
+        menu.add_command(label="In Dateimanager öffnen",
+                         command=lambda: self._open_in_fm(
+                             e.dest_file if e.dest_file else e.src_file))
+        menu.add_command(label="Quelldatei im Dateimanager öffnen",
+                         command=lambda: self._open_in_fm(e.src_file))
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    def _open_in_fm(self, path: Path) -> None:
+        try:
+            open_path_in_file_manager(path)
         except OSError:
             pass
 
@@ -319,7 +378,9 @@ class CopyTab(tk.Frame):
             return []
         dest_base = Path(self.dest_var.get()).resolve()
         if require_dest_exists and not dest_base.exists():
-            messagebox.showerror("Fehler", f"Zielverzeichnis existiert nicht:\n{dest_base}")
+            ErrorDialog(self, "Zielverzeichnis existiert nicht",
+                        "Der angegebene iRacing-Setup-Ordner wurde nicht gefunden.",
+                        path=str(dest_base))
             return None
         plan = plan_sto_operations(
             dest_base, sources, self.alias_editor.get_alias_dict(),
@@ -341,7 +402,8 @@ class CopyTab(tk.Frame):
 
     def _validate(self) -> bool:
         if self.mode_var.get() in ("season", "both") and not self.season_var.get().strip():
-            messagebox.showerror("Fehler", "Bitte Season-Name eingeben.")
+            ErrorDialog(self, "Season fehlt",
+                        "Bei Modus „Season“ oder „Season + Strecke“ muss ein Season-Name eingegeben werden (z. B. 26S2).")
             return False
         return True
 
@@ -390,6 +452,61 @@ class CopyTab(tk.Frame):
             f"{added} neue Zeile(n) im Alias-Editor.\n"
             "Bitte iRacing-Ordner zuweisen und speichern.",
         )
+
+    # ── Watch-Modus ───────────────────────────────────────────────────────────
+    def _watch_toggle(self) -> None:
+        if self.watch_var.get():
+            src = self.source_var.get()
+            if not os.path.isdir(src):
+                self.watch_var.set(False)
+                return
+            sources = collect_sto_sources(Path(src), self.recursive_var.get())
+            self._watch_known_files = {str(p) for _, p in sources}
+            self._watch_tick()
+        else:
+            self._watch_cancel()
+
+    def _watch_tick(self) -> None:
+        if not self.watch_var.get():
+            return
+        src = self.source_var.get()
+        if not os.path.isdir(src):
+            self.watch_var.set(False)
+            self._wlog("⟳  Watch: Quellordner nicht verfügbar — beobachten beendet.", "warn")
+            return
+        try:
+            sources = collect_sto_sources(Path(src), self.recursive_var.get())
+            current = {str(p) for _, p in sources}
+            new_files = current - self._watch_known_files
+            if new_files:
+                self._watch_known_files = current
+                self._scan()
+                for iid in self._results_tree.get_children():
+                    try:
+                        idx = int(iid)
+                    except ValueError:
+                        continue
+                    if idx < len(self._last_plan):
+                        e = self._last_plan[idx]
+                        if str(e.src_file) in new_files:
+                            existing = self._results_tree.item(iid, "tags")
+                            self._results_tree.item(iid, tags=(*existing, "new"))
+                self._wlog(f"\n  ⟳  Watch: {len(new_files)} neue Datei(en) erkannt", "ok")
+                self.after(3000, self._clear_new_tags)
+        except OSError:
+            pass
+        self._watch_after_id = str(self.after(WATCH_INTERVAL_MS, self._watch_tick))
+
+    def _watch_cancel(self) -> None:
+        if self._watch_after_id is not None:
+            self.after_cancel(self._watch_after_id)
+            self._watch_after_id = None
+
+    def _clear_new_tags(self) -> None:
+        for iid in self._results_tree.get_children():
+            tags = self._results_tree.item(iid, "tags")
+            if "new" in tags:
+                self._results_tree.item(iid, tags=tuple(t for t in tags if t != "new"))
 
     # ── Aktionen ──────────────────────────────────────────────────────────────
     def _scan(self):

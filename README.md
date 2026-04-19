@@ -28,22 +28,17 @@ Akzeptiert:
 ## Installation
 
 1. Python 3.11+ installieren.
-2. Optional: Abhängigkeiten installieren:
-
-```bash
-pip install -r requirements.txt
-```
-
-3. Das Skript starten:
+2. Das Skript starten:
 
 ```bash
 python iracing_setup_manager.py
 ```
 
-4. Optional: Erstellen einer Einzeldatei-App mit PyInstaller:
+3. Optional: Einzeldatei-App mit PyInstaller bauen:
 
 ```bash
-pyinstaller --onefile --windowed --name "iRacing Setup Manager" iracing_setup_manager.py
+pip install -e ".[build]"
+pyinstaller "iRacing Setup Manager.spec"
 ```
 
 ## Bedienung
@@ -99,6 +94,21 @@ pyinstaller --onefile --windowed --name "iRacing Setup Manager" iracing_setup_ma
 
 - `~/.iracing_setup_manager.json`: letzte Quelle, Ziel, Modus, Season, Move-Status
 - `~/.iracing_aliases.json`: Alias-Liste
+
+## Entwicklung
+
+Dev-Abhängigkeiten und Pre-commit-Hooks installieren:
+
+```bash
+pip install -e ".[dev]"
+pre-commit install
+```
+
+Damit laufen Ruff, mypy und Whitespace-Checks lokal vor jedem Commit. Tests:
+
+```bash
+pytest
+```
 
 ## Lizenz
 
