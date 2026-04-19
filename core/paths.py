@@ -70,7 +70,7 @@ def open_path_in_file_manager(path: Path) -> None:
     if not path.is_dir():
         path = path.parent
     if sys.platform == "win32":
-        getattr(os, "startfile")(str(path))
+        os.startfile(str(path))  # type: ignore[attr-defined]
     elif sys.platform == "darwin":
         subprocess.run(["open", str(path)], check=False)
     else:

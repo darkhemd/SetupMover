@@ -35,3 +35,7 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 module = "core.*"
 strict = true
+
+[[tool.mypy.overrides]]
+module = "core.paths"
+warn_unused_ignores = false
